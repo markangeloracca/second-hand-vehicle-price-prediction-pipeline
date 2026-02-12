@@ -1,0 +1,452 @@
+\documentclass[lettersize,journal]{IEEEtran}
+\usepackage{amsmath,amsfonts}
+\usepackage{algorithmic}
+\usepackage{algorithm}
+\usepackage{array}
+\usepackage[caption=false,font=normalsize,labelfont=sf,textfont=sf]{subfig}
+\usepackage{textcomp}
+\usepackage{stfloats}
+\usepackage{url}
+\usepackage{verbatim}
+\usepackage{graphicx}
+\graphicspath{{./}}
+\usepackage{cite}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hyphenation{op-tical net-works semi-conduc-tor IEEE-Xplore Data-bricks}
+
+\begin{document}
+
+\title{Second-Hand Vehicle Price Prediction Using a Medallion Architecture Pipeline on Databricks}
+
+\author{Group~8: Mark~Racca, Ranjit~Singh, Edmund~Yu,~ENSF~612
+\thanks{This paper was produced as part of the ENSF 612 course project at the University of Calgary, December 2025.}
+\thanks{Dataset source: Kaggle - Used Vehicles for Sale \cite{kaggle_dataset}.}}
+
+\markboth{ENSF 612 - Engineering Large Scale Data Analytics Systems, Fall 2025}%
+{Group 8: Second-Hand Vehicle Price Prediction}
+
+\maketitle
+
+\begin{abstract}
+This paper presents a comprehensive machine learning pipeline for predicting second-hand vehicle prices using a medallion architecture implemented on Databricks. We processed approximately 24,000 vehicle listings from the Toronto area through a three-layer data architecture (Bronze, Silver, Gold) using PySpark and Delta Lake, reducing the dataset to 19,461 high-quality records after rigorous cleaning and validation. Three regression models were evaluated: Linear Regression (baseline), Random Forest, and Gradient Boosting. The Gradient Boosting model achieved the best performance with an RMSE of \$16,399 and an R\textsuperscript{2} score of 0.9090, demonstrating strong predictive capability for vehicle pricing. Linear Regression provided a reasonable baseline (R\textsuperscript{2} = 0.7034), while Random Forest achieved intermediate performance (R\textsuperscript{2} = 0.8504). Our hybrid architecture, combining PySpark for data engineering with scikit-learn for machine learning, successfully addresses the constraints of Databricks Community Edition while maintaining production-quality data processing patterns. This work demonstrates the practical application of big data engineering principles to real-world price prediction problems.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Machine Learning, Vehicle Price Prediction, Medallion Architecture, Delta Lake, PySpark, Gradient Boosting, Random Forest, Databricks.
+\end{IEEEkeywords}
+
+\section{Introduction}
+\IEEEPARstart{T}{he} used vehicle market represents a significant segment of the automotive industry, with millions of transactions occurring annually. Accurate price prediction for second-hand vehicles is crucial for both buyers and sellers, enabling fair market valuations and informed decision-making. However, vehicle pricing is inherently complex, influenced by numerous factors including make, model, age, mileage, condition, and regional market dynamics.
+
+Traditional pricing approaches often rely on manual appraisals or simple rule-based systems that fail to capture the intricate relationships between vehicle attributes and market value. Machine learning offers a data-driven alternative, capable of learning complex patterns from historical transaction data to generate accurate price predictions.
+
+This paper presents a complete end-to-end machine learning pipeline for vehicle price prediction, implementing industry best practices for data engineering and model development. Our key contributions include:
+
+\begin{itemize}
+    \item Implementation of a medallion architecture (Bronze $\rightarrow$ Silver $\rightarrow$ Gold) for structured data processing using Delta Lake on Databricks
+    \item Comprehensive data cleaning and feature engineering pipeline processing 24,198 raw vehicle records
+    \item Comparative evaluation of three regression models with hyperparameter optimization
+    \item A hybrid PySpark/scikit-learn architecture that addresses Databricks Community Edition constraints while maintaining production patterns
+\end{itemize}
+
+The remainder of this paper is organized as follows: Section II describes the dataset and exploratory analysis. Section III details our methodology, including the medallion architecture and feature engineering approaches. Section IV presents experimental results and model comparisons. Section V discusses findings, limitations, and potential improvements. Section VI concludes with key insights and future work directions.
+
+\section{Dataset Description}
+
+\subsection{Data Source}
+The dataset comprises 24,198 second-hand vehicle listings collected from the Toronto area, sourced from Kaggle \cite{kaggle_dataset}. Each record represents a unique vehicle listing with 17 attributes capturing vehicle specifications and pricing information.
+
+\subsection{Feature Overview}
+The raw dataset contains the following attributes:
+
+\textbf{Identification Features:} Make, Model, Year
+
+\textbf{Physical Specifications:} Body Type, Engine, Transmission, Drivetrain, Exterior Colour, Interior Colour, Passengers, Doors
+
+\textbf{Usage Metrics:} Kilometres (odometer reading)
+
+\textbf{Fuel Efficiency:} City (L/100km), Highway (L/100km)
+
+\textbf{Fuel Type:} Gasoline, Diesel, Electric, Hybrid, Premium Unleaded, etc.
+
+\textbf{Target Variable:} Price (CAD)
+
+\subsection{Initial Data Quality Assessment}
+Exploratory analysis revealed significant data quality challenges requiring systematic cleaning. Table~\ref{tab:missing_values} summarizes the missing value distribution in the raw Bronze layer data.
+
+\begin{table}[!t]
+\caption{Missing Value Analysis in Bronze Layer}
+\label{tab:missing_values}
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Column} & \textbf{Null Count} & \textbf{Null \%} \\
+\midrule
+Passengers & 12,173 & 50.31\% \\
+Interior Colour & 7,780 & 32.15\% \\
+City (Fuel) & 6,363 & 26.30\% \\
+Highway (Fuel) & 6,363 & 26.30\% \\
+Doors & 4,587 & 18.96\% \\
+Engine & 2,062 & 8.52\% \\
+Transmission & 1,344 & 5.55\% \\
+Drivetrain & 1,231 & 5.09\% \\
+Body Type & 1,230 & 5.08\% \\
+Kilometres & 233 & 0.96\% \\
+\midrule
+Year, Make, Model, Price & 0 & 0.00\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The Passengers field exhibited the highest missing rate at 50.31\%, followed by Interior Colour at 32.15\%. Critical prediction features (Year, Make, Model, Price) contained no missing values, providing a solid foundation for modeling.
+
+\subsection{Price Distribution}
+The target variable exhibits a right-skewed distribution with:
+\begin{itemize}
+    \item Minimum: \$1,500
+    \item Maximum: \$919,988
+    \item Mean: \$47,569
+    \item Median: \$34,988
+\end{itemize}
+
+The substantial difference between mean and median indicates the presence of high-value luxury vehicles that create positive skewness. The wide price range (\$1,500 to \$919,988) presents challenges for model training, particularly for linear models sensitive to outliers.
+
+\section{Methodology}
+
+\subsection{System Architecture}
+We implemented a medallion architecture, a layered data design pattern that progressively refines data quality through distinct processing stages. This architecture was deployed on Databricks Community Edition using Delta Lake for data storage and versioning. Fig.~\ref{fig:architecture} illustrates the complete pipeline architecture.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=3.4in]{architecture_diagram_updated.png}
+\caption{Vehicle Price Prediction Pipeline implementing the Medallion Architecture pattern. Data flows from raw CSV through Bronze (raw ingestion), Silver (cleaning), and Gold (feature engineering) layers before model training and prediction.}
+\label{fig:architecture}
+\end{figure}
+
+\subsubsection{Bronze Layer - Raw Data Ingestion}
+The Bronze layer ingests raw CSV data with minimal transformation, preserving the original data while adding metadata for lineage tracking:
+
+\begin{itemize}
+    \item \texttt{record\_id}: Unique identifier using monotonically increasing ID
+    \item \texttt{ingestion\_timestamp}: UTC timestamp of data ingestion
+    \item \texttt{source\_file}: Original filename for provenance tracking
+\end{itemize}
+
+Column names were standardized by removing leading/trailing spaces and replacing spaces with underscores to comply with Delta Lake naming requirements. The Bronze table retains all 24,198 records in their original form.
+
+\subsubsection{Silver Layer - Data Cleaning and Validation}
+The Silver layer applies comprehensive data cleaning and validation rules. Table~\ref{tab:silver_cleaning} summarizes the key transformations applied.
+
+\begin{table}[!t]
+\caption{Silver Layer Data Cleaning Operations}
+\label{tab:silver_cleaning}
+\centering
+\begin{tabular}{p{2cm}p{5.5cm}}
+\toprule
+\textbf{Operation} & \textbf{Description} \\
+\midrule
+Kilometres Extraction & Regex extraction from ``53052 km'' format to numeric \\
+\midrule
+Fuel Efficiency & Extract numeric L/100km values; handle range formats (e.g., ``9.0L - 9.5L/100km'' $\rightarrow$ 9.0) \\
+\midrule
+Categorical Standardization & Normalize fuel types (``Gas'' $\rightarrow$ ``Gasoline''), uppercase transmission values \\
+\midrule
+Missing Value Imputation & Group-wise median imputation for Kilometres by Make/Model/Year \\
+\midrule
+Outlier Removal & Filter: Year $\in$ [1990, 2025], Price $\in$ [\$1,000, \$1,000,000], Kilometres $\in$ [0, 500,000] \\
+\midrule
+Duplicate Removal & Remove exact duplicates based on all feature columns \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The cleaning process removed 127 outlier records and 4,610 duplicate entries, reducing the dataset from 24,198 to 19,461 records (19.58\% reduction). This aggressive cleaning ensures high data quality for downstream modeling while retaining sufficient samples for robust training.
+
+\subsubsection{Gold Layer - Feature Engineering}
+The Gold layer transforms cleaned data into model-ready features through several engineering operations:
+
+\textbf{Derived Numerical Features:}
+\begin{itemize}
+    \item \texttt{vehicle\_age}: Current year minus vehicle year
+    \item \texttt{avg\_fuel\_efficiency}: Mean of city and highway fuel consumption
+    \item \texttt{engine\_displacement}: Extracted from engine string (e.g., ``2.0L'' $\rightarrow$ 2.0)
+    \item \texttt{cylinder\_count}: Extracted from engine description (e.g., ``V6'' $\rightarrow$ 6)
+\end{itemize}
+
+\textbf{Frequency Encoding:}
+Due to the high cardinality of the Model feature (hundreds of unique values), we applied frequency encoding with log transformation:
+\begin{equation}
+\texttt{model\_frequency\_log} = \ln(\text{count}(\text{Model}) + 1)
+\end{equation}
+
+This approach captures the intuition that popular models may have more stable market pricing while avoiding the dimensionality explosion of one-hot encoding.
+
+\textbf{Train/Test Split:}
+The Gold layer data was split into training (80\%, 15,634 records) and test (20\%, 3,827 records) sets using a fixed random seed for reproducibility.
+
+\subsection{Hybrid Architecture Decision}
+A significant architectural decision was required due to Databricks Community Edition limitations. The free tier uses Spark Connect, which blocks direct instantiation of PySpark ML transformers (StringIndexer, OneHotEncoder) and models through its security manager.
+
+We adopted a hybrid approach:
+\begin{itemize}
+    \item \textbf{Data Layer}: PySpark for all data I/O and transformations
+    \item \textbf{ML Layer}: scikit-learn for preprocessing and model training
+    \item \textbf{Results Layer}: PySpark for persisting predictions to Delta tables
+\end{itemize}
+
+This architecture maintains production-quality data engineering patterns while circumventing platform restrictions. The trade-off is that model training occurs on data converted to Pandas DataFrames, limiting scalability to datasets that fit in memory.
+
+\subsection{Feature Preprocessing Pipeline}
+The scikit-learn preprocessing pipeline consists of:
+
+\textbf{Categorical Features} (5 columns: Make, BodyType, FuelType, Transmission, Drivetrain):
+\begin{itemize}
+    \item OneHotEncoder with \texttt{handle\_unknown='ignore'} and \texttt{drop='first'} to handle unseen categories during inference and eliminate multicollinearity from the dummy variable trap
+\end{itemize}
+
+\textbf{Numerical Features} (8 columns: Kilometres, City, Highway, vehicle\_age, avg\_fuel\_efficiency, engine\_displacement, cylinder\_count, model\_frequency\_log):
+\begin{itemize}
+    \item StandardScaler for zero-mean, unit-variance normalization
+\end{itemize}
+
+\subsection{Model Selection and Hyperparameter Tuning}
+Three regression algorithms were evaluated:
+
+\subsubsection{Linear Regression (Baseline)}
+Ordinary least squares regression serving as a baseline model. No hyperparameter tuning was applied.
+
+\subsubsection{Random Forest Regressor}
+An ensemble method using bootstrap aggregation of decision trees. Hyperparameters were tuned using 3-fold cross-validation with GridSearchCV:
+\begin{itemize}
+    \item \texttt{n\_estimators}: [50, 100, 200]
+    \item \texttt{max\_depth}: [5, 10, 15]
+    \item \texttt{min\_samples\_leaf}: [1, 5]
+\end{itemize}
+
+Best parameters: \texttt{n\_estimators}=50, \texttt{max\_depth}=10, \texttt{min\_samples\_leaf}=5
+
+\subsubsection{Gradient Boosting Regressor}
+A sequential ensemble method that builds trees to correct residual errors. Hyperparameters tuned:
+\begin{itemize}
+    \item \texttt{n\_estimators}: [50, 100, 200]
+    \item \texttt{max\_depth}: [3, 5, 7]
+    \item \texttt{learning\_rate}: [0.05, 0.1, 0.2]
+\end{itemize}
+
+Best parameters: \texttt{n\_estimators}=50, \texttt{max\_depth}=7, \texttt{learning\_rate}=0.2
+
+\subsection{Evaluation Metrics}
+Model performance was assessed using three standard regression metrics:
+
+\textbf{Root Mean Squared Error (RMSE):}
+\begin{equation}
+\text{RMSE} = \sqrt{\frac{1}{n}\sum_{i=1}^{n}(y_i - \hat{y}_i)^2}
+\end{equation}
+
+\textbf{Mean Absolute Error (MAE):}
+\begin{equation}
+\text{MAE} = \frac{1}{n}\sum_{i=1}^{n}|y_i - \hat{y}_i|
+\end{equation}
+
+\textbf{Coefficient of Determination (R\textsuperscript{2}):}
+\begin{equation}
+R^2 = 1 - \frac{\sum_{i=1}^{n}(y_i - \hat{y}_i)^2}{\sum_{i=1}^{n}(y_i - \bar{y})^2}
+\end{equation}
+
+\section{Results}
+
+\subsection{Model Comparison}
+Table~\ref{tab:model_results} presents the performance comparison across all three models on the held-out test set.
+
+\begin{table}[!t]
+\caption{Model Performance Comparison on Test Set}
+\label{tab:model_results}
+\centering
+\begin{tabular}{lcccr}
+\toprule
+\textbf{Model} & \textbf{RMSE} & \textbf{MAE} & \textbf{R\textsuperscript{2}} & \textbf{Time (s)} \\
+\midrule
+Gradient Boosting & \$16,399 & \$6,553 & 0.9090 & 187.7 \\
+Random Forest & \$21,023 & \$8,864 & 0.8504 & 147.6 \\
+Linear Regression & \$29,605 & \$13,592 & 0.7034 & 2.4 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=3.4in]{model_comparison_updated.png}
+\caption{Visual comparison of model performance metrics. Gradient Boosting achieves the lowest error and highest R\textsuperscript{2}, followed by Random Forest and Linear Regression.}
+\label{fig:model_comparison}
+\end{figure}
+
+The Gradient Boosting model achieved the best overall performance with an RMSE of \$16,399 and R\textsuperscript{2} of 0.9090, indicating that the model explains approximately 91\% of the variance in vehicle prices. The Random Forest model performed well with R\textsuperscript{2} of 0.8504, while Linear Regression provided a reasonable baseline with R\textsuperscript{2} of 0.7034, explaining approximately 70\% of the price variance. The performance hierarchy aligns with expectations: ensemble methods outperform simple linear models on this non-linear pricing problem, while Linear Regression's lower performance reflects its inability to capture complex feature interactions without explicit polynomial terms.
+
+\subsection{Feature Importance Analysis}
+Fig.~\ref{fig:correlation} shows the correlation matrix for numerical features, revealing key relationships with the target variable (Price).
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=3.4in]{correlation_heatmap.png}
+\caption{Pearson correlation matrix for numerical features. Kilometres shows moderate negative correlation with price (-0.41), while average fuel efficiency shows moderate positive correlation (0.45).}
+\label{fig:correlation}
+\end{figure}
+
+Key correlation findings:
+\begin{itemize}
+    \item \texttt{Kilometres} shows moderate negative correlation with Price (-0.41), confirming mileage as a key pricing factor
+    \item \texttt{vehicle\_age} shows negative correlation with Price (-0.26), confirming depreciation effects
+    \item \texttt{avg\_fuel\_efficiency} shows positive correlation (0.45), indicating fuel efficiency impacts pricing
+    \item City and Highway fuel efficiency show strong positive correlations with Price (0.44 and 0.44 respectively)
+\end{itemize}
+
+\subsection{Prediction Quality}
+Fig.~\ref{fig:actual_vs_predicted} presents the actual versus predicted price scatter plot for the Gradient Boosting model.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=3.4in]{actual_vs_predicted.png}
+\caption{Actual vs. Predicted prices for the Gradient Boosting model (R\textsuperscript{2} = 0.9090). Points clustered along the diagonal indicate accurate predictions. Color intensity represents point density.}
+\label{fig:actual_vs_predicted}
+\end{figure}
+
+The model demonstrates strong predictive performance across the price range, with predictions clustering tightly around the perfect prediction line. Some dispersion is observed at higher price points (\$100K+), likely due to the lower sample density in this range and the inherent variability in luxury vehicle pricing.
+
+\subsection{Price Distribution Analysis}
+Fig.~\ref{fig:price_distribution} illustrates the price distribution characteristics of the dataset.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=3.4in]{price_distribution.png}
+\caption{Left: Overall price distribution showing right skew (mean \$47,569, median \$34,988). Right: Price variation by body type, with SUVs showing the highest median prices.}
+\label{fig:price_distribution}
+\end{figure}
+
+The analysis reveals that SUVs command the highest median prices, followed by Sedans and Trucks. This aligns with market trends favoring larger utility vehicles in the Canadian market.
+
+\section{Discussion}
+
+\subsection{Linear Regression Baseline Analysis}
+The Linear Regression model achieved an R\textsuperscript{2} of 0.7034 and RMSE of \$29,605, providing a meaningful baseline for comparison with ensemble methods. While significantly underperforming the tree-based models, this result demonstrates that linear relationships capture approximately 70\% of the price variance in the dataset.
+
+Several factors contribute to Linear Regression's lower performance relative to ensemble methods:
+
+\textbf{Non-linear Relationships:} Vehicle pricing inherently involves non-linear interactions. For example, the depreciation rate is not constant---vehicles typically depreciate faster in early years, then stabilize. Linear Regression cannot capture these patterns without explicit polynomial feature engineering.
+
+\textbf{Feature Interactions:} The price impact of features like body type, make, and engine size interact in complex ways. A V8 engine may command a premium in a truck but less so in a sedan. Tree-based methods automatically discover such interactions, while Linear Regression treats features independently.
+
+\textbf{High-Dimensional Categorical Encoding:} The one-hot encoding of categorical features (particularly Make with 40+ manufacturers) creates a sparse, high-dimensional feature space. We addressed potential multicollinearity by using \texttt{drop='first'} in the OneHotEncoder, which eliminates the dummy variable trap and ensures numerical stability.
+
+\textbf{Scale Sensitivity:} While StandardScaler normalizes numerical features, the binary one-hot encoded columns remain on a different scale. This scale imbalance can bias coefficient estimates, though the regularization effect of dropping one category per feature helps mitigate this issue.
+
+\subsubsection{Potential Improvements for Linear Models}
+To improve linear model performance beyond the baseline, the following modifications could be explored:
+
+\begin{enumerate}
+    \item \textbf{Ridge Regression (L2 Regularization):} Add coefficient penalties to improve generalization:
+    \begin{equation}
+    \min_{\beta} \|y - X\beta\|_2^2 + \lambda\|\beta\|_2^2
+    \end{equation}
+    
+    \item \textbf{Lasso Regression (L1 Regularization):} Use L1 penalties for automatic feature selection by driving irrelevant coefficients to zero.
+    
+    \item \textbf{Polynomial Features:} Explicitly model non-linear relationships through polynomial expansion of key numerical features.
+    
+    \item \textbf{Log Transform Target:} Given the right-skewed price distribution, predicting $\log(\text{Price})$ may improve linear model performance by normalizing the target distribution.
+    
+    \item \textbf{Feature Selection:} Remove highly correlated features (e.g., one of City/Highway fuel efficiency) to reduce redundancy and improve coefficient interpretability.
+\end{enumerate}
+
+\subsection{Ensemble Model Success}
+The strong performance of Gradient Boosting and Random Forest can be attributed to their inherent properties:
+
+\textbf{Non-linearity:} Tree-based methods naturally capture non-linear relationships between features and price without explicit polynomial feature engineering.
+
+\textbf{Robustness to Multicollinearity:} Decision trees split on individual features, making them less sensitive to correlated predictors than linear methods.
+
+\textbf{Automatic Feature Selection:} Trees inherently perform feature selection by choosing the most informative splits, effectively ignoring uninformative features.
+
+\textbf{Handling of Mixed Types:} Tree methods handle both numerical and categorical features naturally without requiring careful scaling.
+
+\subsection{Architecture Trade-offs}
+The hybrid PySpark/scikit-learn architecture successfully addressed Databricks Community Edition limitations while maintaining code organization. However, this approach has scalability implications:
+
+\textbf{Memory Constraints:} Converting Spark DataFrames to Pandas requires the entire dataset to fit in driver memory. Our 19,461-record dataset (approximately 15MB) was well within limits, but larger datasets would require sampling or distributed alternatives.
+
+\textbf{Production Considerations:} For production deployment on paid Databricks tiers, the architecture should be refactored to use native PySpark ML pipelines with MLflow model registry integration.
+
+\subsection{Business Implications}
+The Gradient Boosting model's MAE of \$6,553 represents approximately 18.7\% of the median vehicle price (\$34,988). This level of accuracy enables several practical applications:
+
+\begin{itemize}
+    \item \textbf{Seller Pricing Guidance:} Providing market-aligned listing price recommendations
+    \item \textbf{Buyer Due Diligence:} Identifying potentially over/underpriced vehicles
+    \item \textbf{Dealer Inventory Valuation:} Supporting bulk vehicle portfolio assessment
+    \item \textbf{Insurance Valuations:} Assisting in replacement value estimates
+\end{itemize}
+
+\section{Conclusion}
+This paper presented a comprehensive machine learning pipeline for second-hand vehicle price prediction, implementing a medallion architecture on Databricks. Key achievements include:
+
+\begin{enumerate}
+    \item Successful implementation of a Bronze $\rightarrow$ Silver $\rightarrow$ Gold data pipeline processing 24,198 records with rigorous quality controls, yielding 19,461 high-quality records for modeling
+    \item Gradient Boosting model achieving R\textsuperscript{2} = 0.9090 and RMSE = \$16,399, demonstrating strong predictive capability
+    \item Random Forest providing robust intermediate performance with R\textsuperscript{2} = 0.8504, confirming ensemble method effectiveness
+    \item Linear Regression establishing a meaningful baseline with R\textsuperscript{2} = 0.7034, capturing approximately 70\% of price variance through linear relationships
+    \item A practical hybrid architecture addressing platform constraints while maintaining production patterns
+\end{enumerate}
+
+The results demonstrate that ensemble tree-based methods significantly outperform linear approaches for vehicle price prediction, as expected given the inherently non-linear nature of automotive pricing. The Linear Regression baseline provides valuable context for quantifying the improvement gained from more sophisticated algorithms.
+
+\subsection{Future Work}
+Several directions merit further investigation:
+
+\begin{itemize}
+    \item \textbf{Advanced Models:} Evaluate XGBoost, LightGBM, and neural network architectures for potential performance gains
+    \item \textbf{Feature Engineering:} Incorporate market indices, seasonal adjustments, and geographic pricing variations
+    \item \textbf{Model Interpretability:} Apply SHAP values to explain individual predictions and identify key pricing factors
+    \item \textbf{Real-time Deployment:} Implement streaming inference pipeline for live pricing updates
+    \item \textbf{Regularized Linear Models:} Implement Ridge/Lasso regression to potentially improve linear model performance beyond the OLS baseline
+\end{itemize}
+
+\section*{Acknowledgments}
+The authors thank the ENSF 612 course instructors for guidance on big data engineering principles and the Databricks Community Edition platform for providing free cloud computing resources.
+
+\begin{thebibliography}{10}
+
+\bibitem{kaggle_dataset}
+F. Hossein, ``Used Vehicles for Sale Dataset,'' Kaggle, 2024. [Online]. Available: \url{https://www.kaggle.com/datasets/farhanhossein/used-vehicles-for-sale}
+
+\bibitem{delta_lake}
+M. Armbrust \textit{et al.}, ``Delta Lake: High-Performance ACID Table Storage over Cloud Object Stores,'' \textit{Proc. VLDB Endowment}, vol. 13, no. 12, pp. 3411--3424, 2020.
+
+\bibitem{medallion}
+Databricks, ``Medallion Architecture,'' Databricks Documentation, 2024. [Online]. Available: \url{https://docs.databricks.com/en/lakehouse/medallion.html}
+
+\bibitem{breiman2001}
+L. Breiman, ``Random Forests,'' \textit{Machine Learning}, vol. 45, no. 1, pp. 5--32, 2001.
+
+\bibitem{friedman2001}
+J. H. Friedman, ``Greedy Function Approximation: A Gradient Boosting Machine,'' \textit{Annals of Statistics}, vol. 29, no. 5, pp. 1189--1232, 2001.
+
+\bibitem{scikit-learn}
+F. Pedregosa \textit{et al.}, ``Scikit-learn: Machine Learning in Python,'' \textit{Journal of Machine Learning Research}, vol. 12, pp. 2825--2830, 2011.
+
+\bibitem{pyspark}
+Apache Software Foundation, ``PySpark Documentation,'' 2024. [Online]. Available: \url{https://spark.apache.org/docs/latest/api/python/}
+
+\bibitem{vehicle_pricing}
+P. Lesani, S. M. Vieira, and J. M. C. Sousa, ``Used Car Price Prediction using Machine Learning Techniques,'' in \textit{Proc. IEEE Int. Conf. Fuzzy Syst.}, 2020, pp. 1--6.
+
+\bibitem{ridge_regression}
+A. E. Hoerl and R. W. Kennard, ``Ridge Regression: Biased Estimation for Nonorthogonal Problems,'' \textit{Technometrics}, vol. 12, no. 1, pp. 55--67, 1970.
+
+\bibitem{multicollinearity}
+D. A. Belsley, E. Kuh, and R. E. Welsch, \textit{Regression Diagnostics: Identifying Influential Data and Sources of Collinearity}. New York: Wiley, 1980.
+
+\end{thebibliography}
+
+\end{document}

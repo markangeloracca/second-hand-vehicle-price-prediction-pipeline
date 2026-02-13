@@ -25,7 +25,7 @@ Develop a scalable ML pipeline to predict second-hand vehicle prices in the Toro
 ## Big Data Engineering Relevance
 | Concept | Implementation |
 | -------- | ------- |
-| **Distributed Processing **   | PySpark patterns on Databricks (scalable to larger data) |
+| **Distributed Processing**   | PySpark patterns on Databricks (scalable to larger data) |
 | **Pipeline Architecture** | Medallion pattern (Bronze→Silver→Gold) on Delta Lake |
 | **Data Reliability** | ACID transactions for versioning & governance |
 | **Scalability** | ML pipeline extensible to larger datasets beyond free tier |
